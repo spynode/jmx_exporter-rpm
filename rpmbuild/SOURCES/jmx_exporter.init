@@ -1,0 +1,107 @@
+#!/bin/sh
+#
+# chkconfig: 345 99 01
+# description: jmx_export
+#
+#
+# Description: Starts and stops the jmx_exporter for Prometheus
+source /etc/rc.d/init.d/functions
+
+PROG="jmx_exporter"
+JAR="/opt/$PROG/lib/jmx_exporter.jar"
+CONFIG_DIR="/opt/$PROG/conf"
+TARGETS_DIR="$CONFIG_DIR/targets"
+SD_DIR="$CONFIG_DIR/sd"
+PIDFILE_DIR="/var/run/$PROG"
+LOG_DIR="/data/logs/$PROG"
+DAEMON_USER="$PROG"
+TARGETS="$TARGETS_DIR/*"
+CFG="$2"
+[ $CFG ] && { [ -f "$TARGETS_DIR/$CFG" ] || { echo "No configuration file found: $TARGETS_DIR/$CFG"; exit 1; } } && TARGETS=$TARGETS_DIR/$CFG
+
+[ -e /etc/sysconfig/${PROG} ] && . /etc/sysconfig/${PROG}
+
+[[ -z $JMX_ACCESS && -z $JMX_PASS ]] && { JMX_ACCESS=$CONFIG_DIR/jmx.access; JMX_PASS=$CONFIG_DIR/jmx.passwd; }
+[[ -e $JMX_ACCESS && -e $JMX_PASS ]] && JMX_AUTH="-Dcom.sun.management.jmxremote.access.file=$JMX_ACCESS -Dcom.sun.management.jmxremote.password.file=$JMX_PASS" || JMX_AUTH="-Dcom.sun.management.jmxremote.authenticate=false"
+JMX_OPTS="-Dcom.sun.management.jmxremote $JMX_AUTH -Dcom.sun.management.jmxremote.ssl=false"
+
+sdentry() {
+	port=${2##*_}
+	port=${port%\.*}
+	name=${2%_*}
+	entry="[ { \"targets\": [ \"127.0.0.1:$port\" ], \"labels\": { \"host\": \"$name\" } } ]"
+	case "$1" in
+		add)
+			echo $entry > $SD_DIR/$2
+		;;
+		remove)
+			rm -f $SD_DIR/$2
+		;;
+		esac
+}
+
+start() {
+	for cfg in $TARGETS; do
+		cfg=${cfg##*/}
+		port=${cfg##*_}
+		port=${port%\.*}
+		[[ ! $port =~ ^[0-9]+$ ]] && { echo "Could not get port from config name: $cfg"; [ "$CFG" ] && exit 1; continue; }
+		jmx_port=$(($port+100))
+		jmx_opts="$JMX_OPTS -Dcom.sun.management.jmxremote.port=$jmx_port -Dcom.sun.management.jmxremote.rmi.port=$jmx_port -server -Xms1g -Xmx1g"
+		cmd="java $jmx_opts -jar $JAR $port $TARGETS_DIR/$cfg >> $LOG_DIR/$cfg.log 2>&1 & echo \$! > $PIDFILE_DIR/$cfg.pid"
+		echo -n "Starting $PROG process for $cfg: "
+		daemon --user $DAEMON_USER --pidfile "$PIDFILE_DIR/$cfg.pid" $cmd
+		sdentry add $cfg
+		echo
+	done
+        return $?
+}
+
+stop() {
+	for cfg in $TARGETS; do
+		cfg=${cfg##*/}
+		sdentry remove $cfg
+                echo -n "Stopping $PROG process for $cfg: "
+		killproc -p "$PIDFILE_DIR/$cfg.pid"
+		echo
+	done
+	return $?
+}
+
+restart() {
+	for cfg in $TARGETS; do
+                cfg=${cfg##*/}
+		$0 stop $cfg
+		$0 start $cfg
+	done
+}
+
+
+cstatus() {
+	for cfg in $TARGETS; do
+		cfg=${cfg##*/}
+		echo -n "$PROG process for $cfg"
+		status -p "$PIDFILE_DIR/$cfg.pid"
+	done
+}
+
+case "$1" in
+	start)
+		start
+	;;
+	stop)
+		stop
+	;;
+	status)
+		cstatus
+	;;
+	restart)
+		restart
+	;;
+	*)
+		echo "Usage: $0 {start|stop|status|restart}"
+		exit 1
+	;;
+esac
+
+exit $?
