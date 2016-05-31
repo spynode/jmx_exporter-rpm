@@ -19,6 +19,7 @@ TARGETS="$TARGETS_DIR/*"
 CFG="$2"
 [ $CFG ] && { [ -f "$TARGETS_DIR/$CFG" ] || { echo "No configuration file found: $TARGETS_DIR/$CFG"; exit 1; } } && TARGETS=$TARGETS_DIR/$CFG
 
+[ -e /etc/default/${PROG} ] && . /etc/default/${PROG}
 [ -e /etc/sysconfig/${PROG} ] && . /etc/sysconfig/${PROG}
 
 [[ -z $JMX_ACCESS && -z $JMX_PASS ]] && { JMX_ACCESS=$CONFIG_DIR/jmx.access; JMX_PASS=$CONFIG_DIR/jmx.passwd; }
@@ -37,7 +38,7 @@ sdentry() {
 		remove)
 			rm -f $SD_DIR/$2
 		;;
-		esac
+	esac
 }
 
 start() {
@@ -51,10 +52,11 @@ start() {
 		cmd="java $jmx_opts -jar $JAR $port $TARGETS_DIR/$cfg >> $LOG_DIR/$cfg.log 2>&1 & echo \$! > $PIDFILE_DIR/$cfg.pid"
 		echo -n "Starting $PROG process for $cfg: "
 		daemon --user $DAEMON_USER --pidfile "$PIDFILE_DIR/$cfg.pid" $cmd
+		retcode=$?
 		sdentry add $cfg
 		echo
 	done
-        return $?
+        return $retcode
 }
 
 stop() {
@@ -63,9 +65,10 @@ stop() {
 		sdentry remove $cfg
                 echo -n "Stopping $PROG process for $cfg: "
 		killproc -p "$PIDFILE_DIR/$cfg.pid"
+		retcode=$?
 		echo
 	done
-	return $?
+	return $retcode
 }
 
 restart() {
